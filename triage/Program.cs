@@ -123,12 +123,15 @@ builder.Services.AddAuthorization();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowReact", policy =>
-                //policy.WithOrigins("http://localhost:5173")
-                policy.WithOrigins("https://triage-api-h80s.onrender.com")
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials());     
+    policy.WithOrigins(
+    "http://localhost:5173",
+    "https://triage-web-ashy.vercel.app"
+    )
+    .AllowAnyHeader()
+    .AllowAnyMethod()
+    .AllowCredentials());
 });
+
 
 
 var app = builder.Build();
