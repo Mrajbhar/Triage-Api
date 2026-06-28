@@ -48,24 +48,75 @@ namespace triage.Controllers
                 t.DueAt,
                 t.CreatedAt));
 
+       
         [HttpGet]
-        public async Task<IActionResult> GetAll([FromQuery] string? status, [FromQuery] string? priority)
+        public async Task<IActionResult> GetAll(
+            [FromQuery] string? status,
+            [FromQuery] string? priority,
+            [FromQuery] string? assignee,   
+            [FromQuery] bool? breaching,
+            [FromQuery] bool? openOnly,     
+            [FromQuery] string? sort,      
+            [FromQuery] int? page,
+            [FromQuery] int? pageSize)
         {
             var query = _db.Tickets.AsQueryable();
 
             if (IsRequester)
                 query = query.Where(t => t.RequesterId == _me.UserId);
 
-            if (!string.IsNullOrWhiteSpace(status))
-                query = query.Where(t => t.Status == status);
-            if (!string.IsNullOrWhiteSpace(priority))
-                query = query.Where(t => t.Priority == priority);
+            if (!string.IsNullOrWhiteSpace(status)) query = query.Where(t => t.Status == status);
+            if (!string.IsNullOrWhiteSpace(priority)) query = query.Where(t => t.Priority == priority);
+            if (openOnly == true) query = query.Where(t => t.Status != "Resolved");
+            if (assignee == "me") query = query.Where(t => t.AssigneeId == _me.UserId);
+            else if (assignee == "unassigned") query = query.Where(t => t.AssigneeId == null);
+            if (breaching == true)
+            {
+                var thirty = DateTime.UtcNow.AddMinutes(30);
+                query = query.Where(t => t.DueAt != null && t.DueAt <= thirty && t.Status != "Resolved");
+            }
 
-            var tickets = await Project(query.OrderByDescending(t => t.CreatedAt)).ToListAsync();
-            return Ok(tickets);
+            query = sort switch
+            {
+                "oldest" => query.OrderBy(t => t.CreatedAt),
+                "priority" => query.OrderBy(t => t.Priority == "Urgent" ? 0 : t.Priority == "High" ? 1 : t.Priority == "Medium" ? 2 : 3)
+                                    .ThenByDescending(t => t.CreatedAt),
+                "sla" => query.OrderBy(t => t.DueAt ?? DateTime.MaxValue),
+                _ => query.OrderByDescending(t => t.CreatedAt),
+            };
+            if (page is null)
+                return Ok(await Project(query).ToListAsync());
+
+            var p = Math.Max(1, page.Value);
+            var size = Math.Clamp(pageSize ?? 25, 1, 100);
+            var total = await query.CountAsync();
+            var items = await Project(query.Skip((p - 1) * size).Take(size)).ToListAsync();
+
+            return Ok(new PagedResponse<TicketResponse>(items, total, p, size, (int)Math.Ceiling(total / (double)size)));
         }
 
-        
+        [HttpGet("counts")]
+        public async Task<IActionResult> GetCounts()
+        {
+            var thirty = DateTime.UtcNow.AddMinutes(30);
+            var q = _db.Tickets.AsQueryable();
+            if (IsRequester) q = q.Where(t => t.RequesterId == _me.UserId);
+
+            var mine = IsRequester
+                ? await q.CountAsync(t => t.Status != "Resolved")
+                : await q.CountAsync(t => t.AssigneeId == _me.UserId && t.Status != "Resolved");
+
+            var counts = new TicketCountsResponse(
+                Mine: mine,
+                Unassigned: await q.CountAsync(t => t.AssigneeId == null && t.Status != "Resolved"),
+                Open: await q.CountAsync(t => t.Status == "Open"),
+                Breaching: await q.CountAsync(t => t.DueAt != null && t.DueAt <= thirty && t.Status != "Resolved"),
+                Resolved: await q.CountAsync(t => t.Status == "Resolved"));
+
+            return Ok(counts);
+        }
+
+       
         [HttpGet("stats")]
         public async Task<IActionResult> GetStats()
         {
@@ -105,7 +156,7 @@ namespace triage.Controllers
             var ticket = new Ticket
             {
                 Id = Guid.NewGuid(),
-                TenantId = _me.TenantId,        
+                TenantId = _me.TenantId,       
                 RequesterId = _me.UserId,
                 AssigneeId = req.AssigneeId,
                 Subject = req.Subject.Trim(),
@@ -114,7 +165,7 @@ namespace triage.Controllers
                 CreatedAt = DateTime.UtcNow,
             };
 
-           
+            
             var policy = await _db.SlaPolicies.OrderBy(p => p.ResolveMins).FirstOrDefaultAsync();
             if (policy != null)
                 ticket.DueAt = ticket.CreatedAt.AddMinutes(policy.ResolveMins);
@@ -211,7 +262,7 @@ namespace triage.Controllers
 
             if (!await _db.Tickets.AnyAsync(t => t.Id == id)) return NotFound();
 
-           
+         
             var isRequester = string.Equals(_me.Role, "Requester", StringComparison.OrdinalIgnoreCase);
             var isInternal = !isRequester && req.IsInternal;
 

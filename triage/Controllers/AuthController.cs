@@ -27,7 +27,7 @@ namespace triage.Controllers
             _me = me;
         }
 
-       
+        
         [EnableRateLimiting("auth")]
         [HttpPost("register")]
         public async Task<IActionResult> Register(RegisterRequest req)
@@ -49,7 +49,7 @@ namespace triage.Controllers
                 TenantId = tenant.Id,
                 Email = email,
                 FullName = req.FullName,
-                Role = "Admin",  
+                Role = "Admin",   
             };
 
             user.PasswordHash = _hasher.HashPassword(user, req.Password);
@@ -70,7 +70,7 @@ namespace triage.Controllers
 
             var user = await _db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Email == email);
 
-          
+           
             if (user is null)
                 return Unauthorized(new { message = "Invalid email or password." });
 
@@ -116,6 +116,7 @@ namespace triage.Controllers
             return Ok(users);
         }
 
+       
         [Authorize(Roles = "Admin")]
         [HttpPost("users")]
         public async Task<IActionResult> CreateUser(CreateUserRequest req)
@@ -132,7 +133,7 @@ namespace triage.Controllers
 
             var email = req.Email.Trim().ToLowerInvariant();
 
-          
+           
             if (await _db.Users.AnyAsync(u => u.Email == email))
                 return Conflict(new { message = "A user with this email already exists." });
 
@@ -148,6 +149,29 @@ namespace triage.Controllers
             user.PasswordHash = _hasher.HashPassword(user, req.Password);
 
             _db.Users.Add(user);
+            await _db.SaveChangesAsync();
+
+            return Ok(new UserListItem(user.Id, user.FullName, user.Email, user.Role));
+        }
+
+       
+        [Authorize(Roles = "Admin")]
+        [HttpPut("users/{id:guid}/role")]
+        public async Task<IActionResult> UpdateUserRole(Guid id, UpdateRoleRequest req)
+        {
+            var allowed = new[] { "Admin", "Agent", "Requester" };
+            var role = allowed.FirstOrDefault(r => string.Equals(r, req.Role?.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (role is null)
+                return BadRequest(new { message = "Role must be Admin, Agent, or Requester." });
+
+            if (id == _me.UserId)
+                return BadRequest(new { message = "You can't change your own role." });
+
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id);
+            if (user is null)
+                return NotFound(new { message = "User not found." });
+
+            user.Role = role;
             await _db.SaveChangesAsync();
 
             return Ok(new UserListItem(user.Id, user.FullName, user.Email, user.Role));
